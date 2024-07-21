@@ -60,9 +60,10 @@ class CrossDeepNetwork(nn.Module):
         out_deep = self.DeepNet(input_feature)
         final_feature = torch.cat((out_cross, out_deep), dim=1)
 
-        pctr = self.output_layer(final_feature).view(-1)  # 마지막 weight 곱은 왜ㅔ 없지?
-        pctr = torch.sigmoid(pctr)
-        return pctr
+        predicated_ctr = self.output_layer(final_feature).view(-1)  # 마지막 weight 곱은 왜ㅔ 없지?
+        # input should 0 or 1
+        predicated_ctr = torch.sigmoid(predicated_ctr) # 전부 nan? ㅋㅋㅋㅋ......
+        return predicated_ctr
 
 
 class CrossNetwork(nn.Module):
@@ -86,14 +87,18 @@ class CrossNetwork(nn.Module):
             weight_b.append(nn.Parameter(torch.nn.init.normal_(torch.empty(n_input_feat))))
             batchnorm.append(nn.BatchNorm1d(n_input_feat, affine=False))
 
+            # self.bias = nn.Parameter(torch.Tensor(self.layer_num, in_features, 1))
+
         self.weight_w = nn.ParameterList(weight_w)
         self.weight_b = nn.ParameterList(weight_b)
         self.batchnorm = nn.ModuleList(batchnorm)
 
     def forward(self, x):
-        x_0 = x
+        n_sample = x.shape[0]
+        x_0 = x.reshape(n_sample, -1, 1)  # B D 1
 
-        x_i = x.reshape(x.shape[0], -1, 1)
+        # x_i = x.reshape(x.shape[0], -1, 1) # [500][608][1]
+        x_i = x_0 # B D 1
         for i in range(self.n_layer):
             # inner_mat = torch.transpose(res.reshape(res.shape[0], -1, 1))
             # term_mat = torch.bmm(x, inner_mat)  # batch matrix-matrix product
@@ -101,12 +106,25 @@ class CrossNetwork(nn.Module):
             # res = res + torch.matmul(term_mat, self.weight_w[i]) + self.weight_b[i]
             # res = self.batchnorm[i](res)
 
-            xi_w = torch.matmul(self.weight_w[i], x_i)  # W * xi  (bs, in_features, 1)
-            x0_xi_w = torch.matmul(x_0, xi_w)
+            x_i_t = x_i.reshape(n_sample, 1, -1)  # B 1 D
+            x0_xi = torch.matmul(x_0, x_i_t)  # B D D
 
-            x_i = x0_xi_w + self.bias[i] + x_i
+            w_i = self.weight_w[i]  # D
+            # 608 -> 500 * 608
 
-        return x_i
+            x0_xi_w = torch.matmul(x0_xi, w_i)  # B D D * B D 1
+            x0_xi_w = x0_xi_w.reshape(n_sample, -1, 1) # B D 1
+            # x0_xi_w = x0_xi.transpose(0, 1)
+            #
+            #
+            # xi_w = torch.matmul(x_i, w_i)  # W * xi  (bs, in_features, 1)
+            # x0_xi_w = torch.matmul(x_0, xi_w)
+
+            bias = self.weight_b[i]
+            bias = bias.reshape(-1, 1)# D
+            x_i = x0_xi_w + bias + x_i  # # B D D
+
+        return x_i.squeeze(-1)
 
 
 class DeepNetwork(nn.Module):
@@ -140,7 +158,7 @@ class DeepNetwork(nn.Module):
         return dense_output
 
     # 아래 처럼 각 레이어에 다음 결과를 집어 넣는 방식으로 처리해도 되네?
-    def forward(self, inputs):
+    def forward2(self, inputs):
         deep_input = inputs
 
         for i in range(len(self.linears)):

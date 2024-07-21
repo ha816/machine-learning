@@ -5,7 +5,7 @@ import pandas as pd
 dir_path = f"{os.path.dirname(__file__)}/ctr"
 
 
-def load_display_advertising_challenge_df():
+def load_display_advertising_challenge_train_test_df():
     """
     https://www.kaggle.com/c/criteo-display-ad-challenge/data
 
@@ -14,7 +14,8 @@ def load_display_advertising_challenge_df():
     I1-I13 - A total of 13 columns of integer features (mostly count features).
     C1-C26 - A total of 26 columns of categorical features. The values of these features have been hashed onto 32 bits for anonymization purposes.
     """
-    return pd.read_csv(f"{dir_path}/display_advertising_challenge_train.csv")
+    return (pd.read_csv(f"{dir_path}/display_advertising_challenge_train.csv"),
+            pd.read_csv(f"{dir_path}/display_advertising_challenge_test.csv"))
 
 
 def judgeGender(gender):

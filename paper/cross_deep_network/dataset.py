@@ -16,7 +16,6 @@ class DcnDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, index):
-        print(index)
         return torch.tensor(self.sparse_feat[index], dtype=torch.float), \
             torch.tensor(self.dense_feat[index], dtype=torch.float), \
             torch.tensor(self.labels[index], dtype=torch.float)
