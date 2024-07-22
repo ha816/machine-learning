@@ -6,10 +6,11 @@ https://arxiv.org/pdf/1703.04247v1
 
 # Dataset
 
-CTR dataset 
+CTR dataset
+
 - https://www.kaggle.com/c/criteo-display-ad-challenge/data
 - http://labs.criteo.com/downloads/2014-kaggle-displayadvertising-challenge-dataset/
-  - 위 사이트는 outdate
+    - 위 사이트는 outdate
 
 |                  | criteo-display-ad-challenge |
 |:-----------------|:---------------------------:|
@@ -21,5 +22,12 @@ Label - Target variable that indicates if an ad was clicked (1) or not (0).
 I1-I13 - A total of 13 columns of integer features (mostly count features).
 C1-C26 - A total of 26 columns of categorical features. The values of these features have been hashed onto 32 bits for
 anonymization purposes.
+
+|       Category       |                     Item                     |
+|:--------------------:|:--------------------------------------------:|
+| Programming Language |             Java, Python, Scala              |
+|      Framework       |         Spring Boot + WebFlux, Spark         |
+|       Database       | MySQL, MongoDB, Elasticsearch, Neo4j, Redis  |
+|         ETC          | K8s, Argo CD, Helm, Kubeflow, Argo Workflows |
 
 
