@@ -5,189 +5,200 @@ Author:
 Reference:
     [1] Guo H, Tang R, Ye Y, et al. Deepfm: a factorization-machine based neural network for ctr prediction[J]. arXiv preprint arXiv:1703.04247, 2017.(https://arxiv.org/abs/1703.04247)
 """
+import numpy as np
 import torch
 import torch.nn as nn
 
 
 class DeepFactorizationMachine(nn.Module):
     """Instantiates the DeepFM Network architecture.
-
-    :param linear_feature_columns: An iterable containing all the features used by linear part of the model.
-    :param dnn_feature_columns: An iterable containing all the features used by deep part of the model.
-    :param use_fm: bool,use FM part or not
-    :param dnn_hidden_units: list,list of positive integer or empty list, the layer number and units in each layer of DNN
-    :param l2_reg_linear: float. L2 regularizer strength applied to linear part
-    :param l2_reg_embedding: float. L2 regularizer strength applied to embedding vector
-    :param l2_reg_dnn: float. L2 regularizer strength applied to DNN
-    :param init_std: float,to use as the initialize std of embedding vector
-    :param seed: integer ,to use as random seed.
-    :param dnn_dropout: float in [0,1), the probability we will drop out a given DNN coordinate.
-    :param dnn_activation: Activation function to use in DNN
-    :param dnn_use_bn: bool. Whether use BatchNormalization before activation or not in DNN
-    :param task: str, ``"binary"`` for  binary logloss or  ``"regression"`` for regression loss
-    :param device: str, ``"cpu"`` or ``"cuda:0"``
-    :param gpus: list of int or torch.device for multiple gpus. If None, run on `device`. `gpus[0]` should be the same gpu with `device`.
-    :return: A PyTorch model instance.
-
     """
 
     def __init__(self,
-                 linear_feature_columns, dnn_feature_columns, use_fm=True,
-                 dnn_hidden_units=(256, 128),
-                 l2_reg_linear=0.00001, l2_reg_embedding=0.00001, l2_reg_dnn=0, init_std=0.0001, seed=1024,
-                 dnn_dropout=0,
-                 dnn_activation='relu', dnn_use_bn=False, task='binary', device='cpu', gpus=None):
+                 sparse_feat_cardinality_list: list[int],
+                 n_dense_feat: int,
+                 emb_size: int,
+                 deep_layers: list[int]
+                 ):
         super(DeepFactorizationMachine, self).__init__()
 
-        self.use_fm = use_fm
-        self.use_dnn = len(dnn_feature_columns) > 0 and len(dnn_hidden_units) > 0
+        # self.use_dnn = len(dnn_feature_columns) > 0 and len(dnn_hidden_units) > 0
 
-        self.fm = FactorizationMachine()
+        self.sparse_feat_cardinality_list = sparse_feat_cardinality_list
 
-        self.dnn = DNN(self.compute_input_dim(dnn_feature_columns), dnn_hidden_units,
-                       activation=dnn_activation, l2_reg=l2_reg_dnn, dropout_rate=dnn_dropout, use_bn=dnn_use_bn,
-                       init_std=init_std, device=device)
-        self.dnn_linear = nn.Linear(
-            dnn_hidden_units[-1], 1, bias=False).to(device)
+        n_spare_group_feat = len(sparse_feat_cardinality_list)
+        n_input_feat = np.sum(sparse_feat_cardinality_list) + n_dense_feat
 
-        self.add_regularization_weight(
-            filter(lambda x: 'weight' in x[0] and 'bn' not in x[0], self.dnn.named_parameters()), l2=l2_reg_dnn)
-        self.add_regularization_weight(self.dnn_linear.weight, l2=l2_reg_dnn)
+        self.fm = FactorizationMachine(sparse_feat_cardinality_list, n_dense_feat, emb_size)
 
-        self.to(device)
+        self.sparse_emb_list = nn.ModuleList([nn.Embedding(field_size, emb_size)
+                                              for field_size in sparse_feat_cardinality_list])
+        self.dense_weight = nn.Parameter(torch.Tensor(n_spare_group_feat + n_dense_feat, 1))
 
-    def forward(self, X):
-        sparse_emb_list, dense_value_list = self.input_from_feature_columns(X,
-                                                                            self.dnn_feature_columns,
-                                                                            self.embedding_dict)
+        # self.fm_linear = nn.Linear(n_input_feat, 1)
+        self.pfm = PairwiseFactorizationMachine()
 
-        logit = self.linear_model(X)
+        self.dnn = DeepNeuralNetwork(n_input_feat, deep_layers)
 
-        fm_input = torch.cat(sparse_emb_list, dim=1)  # Addition
-        logit += self.fm(fm_input)
-        # spare_embedding을 합쳐 FM 의 입력으로 사.
+        # self.dnn = DNN(self.compute_input_dim(dnn_feature_columns), dnn_hidden_units,
+        #                activation=dnn_activation, l2_reg=l2_reg_dnn, dropout_rate=dnn_dropout, use_bn=dnn_use_bn,
+        #                init_std=init_std, device=device)
 
-        dnn_input = combined_dnn_input(
-            sparse_emb_list, dense_value_list)
-        dnn_output = self.dnn(dnn_input)
-        dnn_logit = self.dnn_linear(dnn_output)
-        logit += dnn_logit
+        # self.dnn_linear = nn.Linear(
+        #     dnn_hidden_units[-1], 1, bias=False).to(device)  # 마지막 결과인 실수를 뽑기 위해서 한 단계를 더 둠
 
-        y_pred = self.out(logit)
+        # self.add_regularization_weight(
+        #     filter(lambda x: 'weight' in x[0] and 'bn' not in x[0], self.dnn.named_parameters()), l2=l2_reg_dnn)
+        # self.add_regularization_weight(self.dnn_linear.weight, l2=l2_reg_dnn)
 
+    def forward(self, sparse_feat, dense_feat):
+        """
+        :param sparse_feat: [B, S.F]
+        :param dense_feat: [B, D.F]
+        :return:
+        """
+        # sparse_emb_list을 이용해서 sparse_input_feat과 곱해서 나온 갚을 임베딩으로 활용
+
+        fm_term = self.fm(sparse_feat, dense_feat)
+
+        # dense 피처 에 하나씩 weight
+        # nn.Parameter(torch.Tensor(sum(fc.dimension for fc in self.dense_feature_columns), 1)
+        # sparse 피처에 embedding
+        # embedding_dict = nn.ModuleDict(
+        #     {feat.embedding_name: nn.Embedding(feat.vocabulary_size, feat.embedding_dim if not linear else 1,
+        #                                        sparse=sparse)
+        #      for feat in sparse_feature_columns + varlen_sparse_feature_columns}
+        # )
+        # 즉 linear 처리일때는 1 아니면 output emb_dim 으로 처리.... ㅅㅍ...
+
+        # input_sparse_feat = torch.concat(sparse_w_x_lxist_, dim=-1)
+        #
+        # input_dense_feat = dense_feat.matmul(self.dense_weight)
+        #
+        # input_feat = torch.concat(input_sparse_feat, input_dense_feat, dim=1)
+        # fm_term = self.fm_linear(input_feat) + self.pfm(input_feat)
+        #
+        # dnn_term = self.dnn(input_feat)
+        #
+        # term = fm_term + dnn_term
+        y_pred = torch.sigmoid(fm_term)
         return y_pred
+
+    def get_sparse_w_x_list(self, x):
+        w_x_list = []
+        begin = 0
+        for field_size, emb in zip(self.sparse_feat_cardinality_list, self.sparse_emb_list):
+            x_i = x[:, begin:begin + field_size].to(torch.long)  # 500
+            w_i_x_i = emb(x_i)
+            # sum_w_i_x_i = torch.sum(w_i_x_i, dim=1, keepdim=False)
+            # w_x_list.append(sum_w_i_x_i)
+
+            w_x_list.append(w_i_x_i)  # [B, V, E] => [B, E]
+            begin = begin + field_size + 1
+
+        return w_x_list
 
 
 class FactorizationMachine(nn.Module):
+
+    def __init__(self,
+                 sparse_feat_cardinality_list: list[int],
+                 n_dense_feat: int,
+                 emb_size: int):
+        super(FactorizationMachine, self).__init__()
+
+        self.n_sparse_grp_feat = len(sparse_feat_cardinality_list)
+        self.sparse_feat_cardinality_list = sparse_feat_cardinality_list
+
+        self.linear = nn.Linear(self.n_sparse_grp_feat + n_dense_feat, 1)
+        self.sparse_emb_list_for_linear = nn.ModuleList([nn.Embedding(field_size, 1)
+                                                         for field_size in sparse_feat_cardinality_list])
+
+        self.sparse_emb_list = nn.ModuleList([nn.Embedding(field_size, emb_size)
+                                              for field_size in sparse_feat_cardinality_list])
+        self.pfm = PairwiseFactorizationMachine()
+
+    def forward(self, sparse_feat, dense_feat):
+        """
+        x: [batch_size, column_size, embedding_size]
+        """
+        # TODO 아래 로직은 dnn 과정에서도 사용한다
+        # fm > linear에서 linear_w_x + densefeat, pairwise 과정에서는 w_x
+        # dnn 과정에서는 w_x ->  w_x + dense_feat을 사용
+        # 쪼개서 DeepFactorizationMachine 에서 처리 가능하도록 하자
+        linear_w_x_list = []
+        w_x_list = []  # for pairwise
+        begin = 0
+        for field_size, linear_emb, emb in zip(self.sparse_feat_cardinality_list, self.sparse_emb_list_for_linear,
+                                               self.sparse_emb_list):
+            x_i = sparse_feat[:, begin:begin + field_size].to(torch.long)
+
+            linear_w_x = linear_emb(x_i)
+            sum_linear_w_x = torch.sum(linear_w_x,  dim=1, keepdim=False)
+            linear_w_x_list.append(sum_linear_w_x)
+
+            w_i_x_i = emb(x_i)
+            w_x_list.append(w_i_x_i)  # [B, V, E] => [B, E]
+            begin = begin + field_size + 1
+
+        linear_w_x = torch.concat(linear_w_x_list, dim=-1)
+        fm_linear_input_x = torch.concat((linear_w_x, dense_feat), dim=-1)
+        fm_linear_and_bias = self.linear(fm_linear_input_x)
+
+        w_x = torch.concat(w_x_list, dim=1)
+        fm_pairwise = self.pfm(w_x)
+        return fm_linear_and_bias + fm_pairwise
+
+
+class DeepNeuralNetwork(nn.Module):
+    """
+    All of the layer in this module are full-connection layers
+    """
+
+    def __init__(self, n_input_feat, layers: list):
+        """
+        :param n_input_feat: total num of input_feature, including of the embedding feature and dense feature
+        :param layers: a list contains the num of each hidden layer's units
+        """
+        super(DeepNeuralNetwork, self).__init__()
+        fc_layers = [nn.Linear(n_input_feat, layers[0]),
+                     nn.BatchNorm1d(layers[0], affine=False),
+                     nn.ReLU(inplace=True)]
+
+        for i in range(1, len(layers)):
+            fc_layers.append(nn.Linear(layers[i - 1], layers[i]))
+            fc_layers.append(nn.BatchNorm1d(layers[i], affine=False))
+            fc_layers.append(nn.Sigmoid())
+
+        fc_layers.append(nn.Linear(layers[-1], 1, bias=False))
+        self.deep = nn.Sequential(*fc_layers)
+
+    def forward(self, x):
+        dense_output = self.deep(x)
+        return dense_output
+
+
+class PairwiseFactorizationMachine(nn.Module):
     """
     Factorization Machine models pairwise (order-2) feature interactions
     *Without linear term and bias*
+    pairwise (order-2) feature interactions refer to the interactions  between every possible pair of features in the dataset.
     """
 
     def __init__(self):
-        super(FactorizationMachine, self).__init__()
+        super(PairwiseFactorizationMachine, self).__init__()
 
     def forward(self, x):
+        # sparse feat 정보도 활용
         """
         Input shape
         - 3D tensor with shape: ``(batch_size,field_size,embedding_size)``.
         Output shape
         - 2D tensor with shape: ``(batch_size, 1)``.
         """
-        # user preferences와 item attirbutes와 같은 성질이 다른 feature를 말함
-
-        # pairwise (order-2) feature interactions refer to the interactions  between every possible pair of features in the dataset.
-
-        # feat x_i and feat x_j
-        # <v_i, v_j> denotes dot product of factor vector v_i and v_j
-        # x_i x_j the dot product of values of i feat and j feat
-        # <v_i, v_j> x_i x_j
-
-        # x_i x_i+1 + ... + x_i+n x_i+n
-
-        # x_i feat emb = x_i x_i+1
-        # torch.sum(x, dim=1, keepdim=True) = (batch_size,1,embedding_size)
-        # (x_i + x_i+1 + x_i_2 + ....) ^2
         square_of_sum = torch.pow(torch.sum(x, dim=1, keepdim=True), 2)
-        # power of 2 of the sum of the embeddings for each feature
-
         sum_of_square = torch.sum(x * x, dim=1, keepdim=True)
-        # (x_i^2 + x_i+1^2 + x_i_2^2 + ....)
-
-        # (x_i + x_i+1 + x_i_2 + ....) ^2 - (x_i^2 + x_i+1^2 + x_i_2^2 + ....)
-        # 2x_i x_i+1 + 2x_i x_i+2 + ... 2
-        # 2(x_i x_i+1 + x_i x_i+2 + .._ x_i+n x_i_n-1)
 
         cross_term = square_of_sum - sum_of_square  # (batch_size,1,embedding_size)
         cross_term = 0.5 * torch.sum(cross_term, dim=2, keepdim=False)  # (batch_size,1)
         return cross_term
-
-
-class DNN(nn.Module):
-    """The Multi Layer Percetron
-
-      Input shape
-        - nD tensor with shape: ``(batch_size, ..., input_dim)``. The most common situation would be a 2D input with shape ``(batch_size, input_dim)``.
-
-      Output shape
-        - nD tensor with shape: ``(batch_size, ..., hidden_size[-1])``. For instance, for a 2D input with shape ``(batch_size, input_dim)``, the output would have shape ``(batch_size, hidden_size[-1])``.
-
-      Arguments
-        - **inputs_dim**: input feature dimension.
-
-        - **hidden_units**:list of positive integer, the layer number and units in each layer.
-
-        - **activation**: Activation function to use.
-
-        - **l2_reg**: float between 0 and 1. L2 regularizer strength applied to the kernel weights matrix.
-
-        - **dropout_rate**: float in [0,1). Fraction of the units to dropout.
-
-        - **use_bn**: bool. Whether use BatchNormalization before activation or not.
-
-        - **seed**: A Python integer to use as random seed.
-    """
-
-    def __init__(self, inputs_dim, hidden_units, activation='relu', l2_reg=0, dropout_rate=0, use_bn=False,
-                 init_std=0.0001, dice_dim=3, seed=1024, device='cpu'):
-        super(DNN, self).__init__()
-        self.dropout_rate = dropout_rate
-        self.dropout = nn.Dropout(dropout_rate)
-        self.seed = seed
-        self.l2_reg = l2_reg
-        self.use_bn = use_bn
-        if len(hidden_units) == 0:
-            raise ValueError("hidden_units is empty!!")
-        hidden_units = [inputs_dim] + list(hidden_units)
-
-        self.linears = nn.ModuleList(
-            [nn.Linear(hidden_units[i], hidden_units[i + 1]) for i in range(len(hidden_units) - 1)])
-
-        if self.use_bn:
-            self.bn = nn.ModuleList(
-                [nn.BatchNorm1d(hidden_units[i + 1]) for i in range(len(hidden_units) - 1)])
-
-        self.activation_layers = nn.ModuleList(
-            [activation_layer(activation, hidden_units[i + 1], dice_dim) for i in range(len(hidden_units) - 1)])
-
-        for name, tensor in self.linears.named_parameters():
-            if 'weight' in name:
-                nn.init.normal_(tensor, mean=0, std=init_std)
-
-        self.to(device)
-
-    def forward(self, inputs):
-        deep_input = inputs
-
-        for i in range(len(self.linears)):
-
-            fc = self.linears[i](deep_input)
-
-            if self.use_bn:
-                fc = self.bn[i](fc)
-
-            fc = self.activation_layers[i](fc)
-
-            fc = self.dropout(fc)
-            deep_input = fc
-        return deep_input

@@ -8,8 +8,8 @@ from torch.utils.data import DataLoader
 
 from common.config import get_torch_gpu_device_if_available
 from common.data.ctr_data import load_display_advertising_challenge_train_test_df
-from paper.cross_deep_network.dataset import DcnDataset
-from paper.cross_deep_network.model import CrossDeepNetwork
+from paper.ctr.cdn.dataset import DcnDataset
+from paper.ctr.cdn.model import CrossDeepNetwork
 
 
 class CrossDeepNetworkController:
