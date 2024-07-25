@@ -18,38 +18,21 @@ class DeepFactorizationMachine(nn.Module):
                  sparse_feat_cardinality_list: list[int],
                  n_dense_feat: int,
                  emb_size: int,
-                 deep_layers: list[int]
-                 ):
+                 deep_layers: list[int]):
         super(DeepFactorizationMachine, self).__init__()
-
-        # self.use_dnn = len(dnn_feature_columns) > 0 and len(dnn_hidden_units) > 0
 
         self.sparse_feat_cardinality_list = sparse_feat_cardinality_list
 
-        n_spare_group_feat = len(sparse_feat_cardinality_list)
-        n_input_feat = np.sum(sparse_feat_cardinality_list) + n_dense_feat
-
-        self.fm = FactorizationMachine(sparse_feat_cardinality_list, n_dense_feat, emb_size)
+        self.fm = FactorizationMachine(sparse_feat_cardinality_list, n_dense_feat)
 
         self.sparse_emb_list = nn.ModuleList([nn.Embedding(field_size, emb_size)
                                               for field_size in sparse_feat_cardinality_list])
-        self.dense_weight = nn.Parameter(torch.Tensor(n_spare_group_feat + n_dense_feat, 1))
 
-        # self.fm_linear = nn.Linear(n_input_feat, 1)
-        self.pfm = PairwiseFactorizationMachine()
+        n_sparse_feat = np.sum(sparse_feat_cardinality_list)
+        self.sparse_emb = nn.Embedding(n_sparse_feat, emb_size)
 
-        self.dnn = DeepNeuralNetwork(n_input_feat, deep_layers)
-
-        # self.dnn = DNN(self.compute_input_dim(dnn_feature_columns), dnn_hidden_units,
-        #                activation=dnn_activation, l2_reg=l2_reg_dnn, dropout_rate=dnn_dropout, use_bn=dnn_use_bn,
-        #                init_std=init_std, device=device)
-
-        # self.dnn_linear = nn.Linear(
-        #     dnn_hidden_units[-1], 1, bias=False).to(device)  # 마지막 결과인 실수를 뽑기 위해서 한 단계를 더 둠
-
-        # self.add_regularization_weight(
-        #     filter(lambda x: 'weight' in x[0] and 'bn' not in x[0], self.dnn.named_parameters()), l2=l2_reg_dnn)
-        # self.add_regularization_weight(self.dnn_linear.weight, l2=l2_reg_dnn)
+        n_spare_feat_grp = len(sparse_feat_cardinality_list)
+        self.dnn = DeepNeuralNetwork(n_spare_feat_grp * emb_size + n_dense_feat, deep_layers)
 
     def forward(self, sparse_feat, dense_feat):
         """
@@ -57,97 +40,81 @@ class DeepFactorizationMachine(nn.Module):
         :param dense_feat: [B, D.F]
         :return:
         """
-        # sparse_emb_list을 이용해서 sparse_input_feat과 곱해서 나온 갚을 임베딩으로 활용
+        spare_feat_grp_list = self.get_spare_feat_grp_list(sparse_feat)
 
-        fm_term = self.fm(sparse_feat, dense_feat)
+        sparse_feat_grp_emb_list = []
+        for x, emb in zip(spare_feat_grp_list, self.sparse_emb_list):
+            w_x = torch.mm(x, emb.weight)
+            sparse_feat_grp_emb_list.append(w_x)
 
-        # dense 피처 에 하나씩 weight
-        # nn.Parameter(torch.Tensor(sum(fc.dimension for fc in self.dense_feature_columns), 1)
-        # sparse 피처에 embedding
-        # embedding_dict = nn.ModuleDict(
-        #     {feat.embedding_name: nn.Embedding(feat.vocabulary_size, feat.embedding_dim if not linear else 1,
-        #                                        sparse=sparse)
-        #      for feat in sparse_feature_columns + varlen_sparse_feature_columns}
-        # )
-        # 즉 linear 처리일때는 1 아니면 output emb_dim 으로 처리.... ㅅㅍ...
+        sparse_feat_emb = torch.stack(sparse_feat_grp_emb_list, dim=1)  # [B, S.G.F, E]
+        fm_term = self.fm(spare_feat_grp_list, sparse_feat_emb, dense_feat)
+        # 이유는 모르겠으나 fm_term nan이 들어감 ㅋㅋ....
 
-        # input_sparse_feat = torch.concat(sparse_w_x_lxist_, dim=-1)
-        #
-        # input_dense_feat = dense_feat.matmul(self.dense_weight)
-        #
-        # input_feat = torch.concat(input_sparse_feat, input_dense_feat, dim=1)
-        # fm_term = self.fm_linear(input_feat) + self.pfm(input_feat)
-        #
-        # dnn_term = self.dnn(input_feat)
-        #
-        # term = fm_term + dnn_term
-        y_pred = torch.sigmoid(fm_term)
-        return y_pred
+        dnn_feat_emb = torch.concat((torch.flatten(sparse_feat_emb, start_dim=1), dense_feat), dim=-1)
+        dnn_term = self.dnn(dnn_feat_emb)
 
-    def get_sparse_w_x_list(self, x):
-        w_x_list = []
+        y_pred = torch.sigmoid(fm_term + dnn_term)
+        return y_pred.squeeze(-1)
+
+    def get_spare_feat_grp_list(self, sparse_feat):
+        spare_feat_grp_list = []
         begin = 0
-        for field_size, emb in zip(self.sparse_feat_cardinality_list, self.sparse_emb_list):
-            x_i = x[:, begin:begin + field_size].to(torch.long)  # 500
-            w_i_x_i = emb(x_i)
-            # sum_w_i_x_i = torch.sum(w_i_x_i, dim=1, keepdim=False)
-            # w_x_list.append(sum_w_i_x_i)
+        for field_size in self.sparse_feat_cardinality_list:
+            end = begin + field_size
+            x_i = sparse_feat[:, begin: end]
+            assert x_i.shape[1] == field_size
 
-            w_x_list.append(w_i_x_i)  # [B, V, E] => [B, E]
-            begin = begin + field_size + 1
-
-        return w_x_list
+            spare_feat_grp_list.append(x_i)
+            begin = end
+        return spare_feat_grp_list
 
 
 class FactorizationMachine(nn.Module):
 
     def __init__(self,
                  sparse_feat_cardinality_list: list[int],
-                 n_dense_feat: int,
-                 emb_size: int):
+                 n_dense_feat: int):
         super(FactorizationMachine, self).__init__()
 
-        self.n_sparse_grp_feat = len(sparse_feat_cardinality_list)
-        self.sparse_feat_cardinality_list = sparse_feat_cardinality_list
-
-        self.linear = nn.Linear(self.n_sparse_grp_feat + n_dense_feat, 1)
+        n_sparse_grp_feat = len(sparse_feat_cardinality_list)
         self.sparse_emb_list_for_linear = nn.ModuleList([nn.Embedding(field_size, 1)
                                                          for field_size in sparse_feat_cardinality_list])
-
-        self.sparse_emb_list = nn.ModuleList([nn.Embedding(field_size, emb_size)
-                                              for field_size in sparse_feat_cardinality_list])
+        self.linear = nn.Linear(n_sparse_grp_feat + n_dense_feat, 1)
         self.pfm = PairwiseFactorizationMachine()
 
-    def forward(self, sparse_feat, dense_feat):
+    def forward(self, sparse_feat_grp_list, sparse_feat_emb, dense_feat):
         """
-        x: [batch_size, column_size, embedding_size]
+        sparse_feat_grp_list: input feat 값을 그대로 보존(Not Embeded)
+        sparse_feat_emb: [batch_size, sparse_group_size, embedding_size]
         """
+        sparse_linear_emb_list = []
+        for sparse_feat_grp, linear_emb in zip(sparse_feat_grp_list, self.sparse_emb_list_for_linear):
+            sparse_linear_emb = torch.mm(sparse_feat_grp, linear_emb.weight)  # [1]
+            sparse_linear_emb_list.append(sparse_linear_emb)
+
+        sparse_linear_emb = torch.concat(sparse_linear_emb_list, dim=-1)
+        fm_linear_input = torch.concat((sparse_linear_emb, dense_feat), dim=-1)
+
+        fm_linear_and_bias = self.linear(fm_linear_input)
+        fm_pairwise = self.pfm(sparse_feat_emb)
+        return fm_linear_and_bias + fm_pairwise
+
+    """
         # TODO 아래 로직은 dnn 과정에서도 사용한다
         # fm > linear에서 linear_w_x + densefeat, pairwise 과정에서는 w_x
         # dnn 과정에서는 w_x ->  w_x + dense_feat을 사용
         # 쪼개서 DeepFactorizationMachine 에서 처리 가능하도록 하자
         linear_w_x_list = []
-        w_x_list = []  # for pairwise
         begin = 0
-        for field_size, linear_emb, emb in zip(self.sparse_feat_cardinality_list, self.sparse_emb_list_for_linear,
-                                               self.sparse_emb_list):
+        for field_size, linear_emb in zip(self.sparse_feat_cardinality_list, self.sparse_emb_list_for_linear):
             x_i = sparse_feat[:, begin:begin + field_size].to(torch.long)
-
             linear_w_x = linear_emb(x_i)
-            sum_linear_w_x = torch.sum(linear_w_x,  dim=1, keepdim=False)
+            sum_linear_w_x = torch.sum(linear_w_x, dim=1, keepdim=False)
             linear_w_x_list.append(sum_linear_w_x)
 
-            w_i_x_i = emb(x_i)
-            w_x_list.append(w_i_x_i)  # [B, V, E] => [B, E]
             begin = begin + field_size + 1
-
-        linear_w_x = torch.concat(linear_w_x_list, dim=-1)
-        fm_linear_input_x = torch.concat((linear_w_x, dense_feat), dim=-1)
-        fm_linear_and_bias = self.linear(fm_linear_input_x)
-
-        w_x = torch.concat(w_x_list, dim=1)
-        fm_pairwise = self.pfm(w_x)
-        return fm_linear_and_bias + fm_pairwise
+    """
 
 
 class DeepNeuralNetwork(nn.Module):

@@ -6,6 +6,10 @@ https://arxiv.org/pdf/1703.04247v1
 
 # Dataset
 
+|                                                          Service                                                          |                                                           Demo                                                            |  
+|:-------------------------------------------------------------------------------------------------------------------------:|:-------------------------------------------------------------------------------------------------------------------------:|  
+| <img width="350" alt="image" src="https://media.oss.navercorp.com/user/18854/files/1321d689-86d4-4b05-9c98-44e02e5d90a1"> | <img width="550" alt="image" src="https://media.oss.navercorp.com/user/18854/files/ad194ec9-fd12-4c20-b860-47301f858189"> |
+
 CTR dataset
 
 - https://www.kaggle.com/c/criteo-display-ad-challenge/data
@@ -29,5 +33,3 @@ anonymization purposes.
 |      Framework       |         Spring Boot + WebFlux, Spark         |
 |       Database       | MySQL, MongoDB, Elasticsearch, Neo4j, Redis  |
 |         ETC          | K8s, Argo CD, Helm, Kubeflow, Argo Workflows |
-
-

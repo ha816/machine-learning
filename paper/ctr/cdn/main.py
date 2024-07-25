@@ -20,8 +20,8 @@ class CrossDeepNetworkController:
         train_df, test_df = load_display_advertising_challenge_train_test_df()
 
         sparse_feat_train_df = train_df.iloc[:, 15:]  # C1 ~ C26
-        sparse_feat_train_cardinality_info = sparse_feat_train_df.nunique().to_dict()
-        sparse_feat_train_df = pd.get_dummies(sparse_feat_train_df, dummy_na=True, dtype='int')
+        sparse_feat_train_cardinality_info = sparse_feat_train_df.nunique().to_dict()  # nan is not consider as value
+        sparse_feat_train_df = pd.get_dummies(sparse_feat_train_df, dummy_na=False, dtype='int')
 
         dense_feat_train_df = train_df.iloc[:, 2:15]  # I1 ~ I13
         for col in dense_feat_train_df.columns:

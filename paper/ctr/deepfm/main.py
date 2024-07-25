@@ -21,7 +21,11 @@ class DeepFactorizationMachineController:
 
         sparse_feat_train_df = train_df.iloc[:, 15:]  # C1 ~ C26
         sparse_feat_train_cardinality_info = sparse_feat_train_df.nunique().to_dict()
-        sparse_feat_train_df = pd.get_dummies(sparse_feat_train_df, dummy_na=True, dtype='int')
+        sparse_feat_train_df = pd.get_dummies(sparse_feat_train_df, dummy_na=False, dtype='int')
+
+        print(f"{sparse_feat_train_cardinality_info}")
+        print(f"{np.sum(list(sparse_feat_train_cardinality_info.values()))}")
+        print(f"{sparse_feat_train_df.shape}")
 
         dense_feat_train_df = train_df.iloc[:, 2:15]  # I1 ~ I13
         for col in dense_feat_train_df.columns:
@@ -30,7 +34,7 @@ class DeepFactorizationMachineController:
 
         self.model = DeepFactorizationMachine(list(sparse_feat_train_cardinality_info.values()),
                                               dense_feat_train_df.shape[1],
-                                              4,
+                                              16,
                                               [128, 64]).to(self.device)
 
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.0001, momentum=0.9)
