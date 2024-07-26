@@ -31,7 +31,8 @@ class DeepFactorizationMachineController:
 
         dense_feat_train_df = train_df.iloc[:, 2:15]  # I1 ~ I13
 
-        dense_feat_train_df = (dense_feat_train_df - dense_feat_train_df.min()) / (dense_feat_train_df.max() - dense_feat_train_df.min())
+        dense_feat_train_df = (dense_feat_train_df - dense_feat_train_df.min()) / (
+                    dense_feat_train_df.max() - dense_feat_train_df.min())
 
         # dense_feat_train_df = (dense_feat_train_df - dense_feat_train_df.mean()) / dense_feat_train_df.std()
         print(dense_feat_train_df.describe())
@@ -54,8 +55,7 @@ class DeepFactorizationMachineController:
         for name, param in self.model.named_parameters():
             print(f"Name: {name} - shape: {param.shape}")
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.01)
-        # self.optimizer = optim.SGD(self.model.parameters(), lr=0.0001, momentum=0.9)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.00001)
         self.criterion = nn.BCELoss()
 
         self.train_dataset = DeepFmDataset(sparse_feat_train_df.values.tolist(),
@@ -79,7 +79,7 @@ class DeepFactorizationMachineController:
     def train(self, epochs: int, batch_size: int = 1000):
 
         self.model.train()
-        train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False) #
 
         torch.autograd.set_detect_anomaly(True)
 
@@ -88,30 +88,32 @@ class DeepFactorizationMachineController:
             loss_records = []
             for sparse_feat, dense_feat, labels in train_loader:
 
-                if torch.isnan(sparse_feat).any() or torch.isnan(dense_feat).any(): # 해당 없음
-                    continue
-                if torch.isinf(sparse_feat).any() or torch.isinf(dense_feat).any(): # 해당 없음
-                    continue
-
                 predicated_ctr = self.model(sparse_feat, dense_feat)
                 loss = self.criterion(predicated_ctr, labels)
 
                 self.optimizer.zero_grad()
                 try:
                     loss.backward()
-                    v_emb = torch.concat([emb.weight for emb in self.model.fm.sparse_emb_list_for_linear], dim=0)
-                    print(f"Mean:{v_emb.mean()}, MAX:{v_emb.max()}, MIN:{v_emb.min()}") # 계속 값이 커지기만 하네;;
+                    iter_loss = loss.item()
+                    # v_emb = torch.concat([emb.weight for emb in self.model.fm.sparse_emb_list_for_linear], dim=0)
+                    # print(f"Mean:{v_emb.mean()}, MAX:{v_emb.max()}, MIN:{v_emb.min()}") # 계속 값이 커지기만 하네;;
                 except Exception as err:
-                    pdb.set_trace()
+                    print(f"ERROR: {err}, LOSS: {loss.item()}")
+                    for name, param in self.model.named_parameters():
+                        if param.grad is not None:
+                            print(f"{name}: {param.grad.norm()}, {param.shape}, {param.requires_grad}, {param.isnan().any()}, {param.isinf().any()}")
+                        else:
+                            print(f"{name}: GRAD NONE, {param.shape}, {param.requires_grad}, {param.isnan().any()}, {param.isinf().any()}")
+                    continue
+                    # pdb.set_trace()
 
                 # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optimizer.step()
-
-                iter_loss = loss.item()
                 loss_records.append(iter_loss)
 
             if epoch % (epochs // 20 - 1) == 0:
                 print(f'Epoch [{epoch}/{epochs}], Mean Loss: {np.mean(loss_records):.4f}')
+
 
             # if epoch % (epochs // 10 - 1) == 0:
             #     print(f'Epoch [{epoch}/{epochs}], Entering Validation Process...')
@@ -143,11 +145,21 @@ class DeepFactorizationMachineController:
 
 
 if __name__ == '__main__':
+    embedding_layer = nn.Embedding(num_embeddings=10, embedding_dim=3)
+    input_indices = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+
+    embeddings = embedding_layer(input_indices)
+
     torch.manual_seed(123)
-    torch.cuda.manual_seed(100)
+    torch.cuda.manual_seed(123)
     controller = DeepFactorizationMachineController()
-    controller.train(epochs=250, batch_size=500)  # batch_size를 2000으로 하면 문제가 없는데...?
+    controller.train(epochs=200, batch_size=1500)  # batch_size를 2000으로 하면 문제가 없는데...?
     # 500으로 suffle true시 문제가 있네?
     # 300으로 하면 17먼째에서 이슈?
     # 500으로 하면 25번째에서 이슈?
     # learning rate를 약간 높임
+
+    # if torch.isnan(sparse_feat).any() or torch.isnan(dense_feat).any(): # 해당 없음
+    #     continue
+    # if torch.isinf(sparse_feat).any() or torch.isinf(dense_feat).any(): # 해당 없음
+    #     continue

@@ -11,6 +11,7 @@ import pdb
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class DeepFactorizationMachine(nn.Module):
@@ -28,12 +29,12 @@ class DeepFactorizationMachine(nn.Module):
 
         self.fm = FactorizationMachine(sparse_feat_cardinality_list, n_dense_feat)
 
-        self.sparse_emb_list = nn.ModuleList([nn.Embedding(field_size, emb_size, scale_grad_by_freq=True)
-                                              for field_size in sparse_feat_cardinality_list])
+        sparse_emb_list = []
+        for field_size in sparse_feat_cardinality_list:
+            sparse_emb = nn.Linear(field_size, emb_size, bias=False)
+            sparse_emb_list.append(sparse_emb)
 
-        for sparse_emb in self.sparse_emb_list:
-            torch.nn.init.xavier_uniform_(sparse_emb.weight)
-            # torch.nn.init.normal_(sparse_emb.weight, mean=0.0, std=0.0001)
+        self.sparse_emb_list = nn.ModuleList(sparse_emb_list)
 
         n_spare_feat_grp = len(sparse_feat_cardinality_list)
         self.dnn = DeepNeuralNetwork(n_spare_feat_grp * emb_size + n_dense_feat, deep_layers)
@@ -48,23 +49,16 @@ class DeepFactorizationMachine(nn.Module):
 
         sparse_feat_grp_emb_list = []
         for x, emb in zip(spare_feat_grp_list, self.sparse_emb_list):
-            w_x = torch.mm(x, emb.weight)
+            w_x = emb(x)
             sparse_feat_grp_emb_list.append(w_x)
 
         sparse_feat_emb = torch.stack(sparse_feat_grp_emb_list, dim=1)  # [B, S.G.F, E]
         fm_term = self.fm(spare_feat_grp_list, sparse_feat_emb, dense_feat)
-        # 이유는 모르겠으나 fm_term nan이 들어감 ㅋㅋ....
 
         dnn_feat_emb = torch.concat((torch.flatten(sparse_feat_emb, start_dim=1), dense_feat), dim=-1)
         dnn_term = self.dnn(dnn_feat_emb)
 
         y_pred = torch.sigmoid(fm_term + dnn_term)
-
-        print(f"FM + DNN : {fm_term.mean()} / {dnn_term.mean()}, Y : {y_pred.sum()}")
-
-        if torch.isnan(y_pred).any():
-            print("DESTROY")
-
         return y_pred.squeeze(-1)
 
     def get_spare_feat_grp_list(self, sparse_feat):
@@ -91,27 +85,12 @@ class FactorizationMachine(nn.Module):
 
         emb_list = []
         for field_size in sparse_feat_cardinality_list:
-            emb = nn.Embedding(field_size, 1, scale_grad_by_freq=True) # scale 하면 괜찮나??
-            torch.nn.init.xavier_uniform_(emb.weight)
-            # torch.nn.init.normal_(emb.weight, mean=0.0, std=0.0001) # 왜
+            emb = nn.Linear(field_size, 1, bias=False)
             emb_list.append(emb)
 
-        self.sparse_emb_list_for_linear = nn.ModuleList(emb_list) # 왜 여기서도 null?
-        # self.sparse_emb_list_for_linear = nn.ModuleList([nn.Embedding(field_size, 1, max_norm=1.0)
-        #                                                  for field_size in sparse_feat_cardinality_list])
-
-        # self.sparse_linear_scale_factor = math.sqrt(np.sum(sparse_feat_cardinality_list))
+        self.sparse_emb_list_for_linear = nn.ModuleList(emb_list)
 
         self.linear = nn.Linear(n_sparse_grp_feat + n_dense_feat, 1)
-        for name, param in self.linear.named_parameters():
-            if 'weight' in name:
-                torch.nn.init.xavier_uniform_(param)
-            # param.bias.data.fill_(0.01)
-            # torch.nn.init.normal_(param, mean=0.0, std=0.0001)
-        # torch.nn.init.normal_(self.linear.bias, mean=0.0, std=0.00001)
-        # nn.Linear의 파라미터 초기화 self.weight = Parameter(torch.empty((out_features, in_features), **factory_kwargs))
-        # torch.empty가 상황에 따라 nan weight를 가지는 경우가 생김
-
         self.pfm = PairwiseFactorizationMachine()
 
     def forward(self, sparse_feat_grp_list, sparse_feat_emb, dense_feat):
@@ -120,26 +99,17 @@ class FactorizationMachine(nn.Module):
         sparse_feat_emb: [batch_size, sparse_group_size, embedding_size]
         """
         sparse_linear_emb_list = []
-        for idx, (sparse_feat_grp, linear_emb) in enumerate(zip(sparse_feat_grp_list, self.sparse_emb_list_for_linear)):
-            if torch.isnan(linear_emb.weight).any():
-                print(f"{idx} : {sparse_feat_grp.shape}: {torch.isnan(linear_emb.weight).sum()}")
-                # 25? 왜 유독 sparse 25에서만 그러지?
-
-            sparse_linear_emb = torch.mm(sparse_feat_grp, linear_emb.weight)  # [1]
-            # sparse_linear_emb = torch.mm(sparse_feat_grp, linear_emb.weight)  # [1]
+        for sparse_feat_grp, linear_emb in zip(sparse_feat_grp_list, self.sparse_emb_list_for_linear):
+            sparse_linear_emb = linear_emb(sparse_feat_grp) # [B, S.F][S.F, 1]
             sparse_linear_emb_list.append(sparse_linear_emb)
 
         sparse_linear_emb = torch.concat(sparse_linear_emb_list, dim=-1)
         fm_linear_input = torch.concat((sparse_linear_emb, dense_feat), dim=-1)  # [B, S.G.F + D.F]
 
-        # print(f"MAX:{fm_linear_input.max()}")  # min-max scaling으로 1로 만듬
-        fm_linear_and_bias = self.linear(fm_linear_input)  #
-
-        # fm_linear_and_bias = self.linear(fm_linear_input) / self.sparse_linear_scale_factor
-
+        fm_linear_and_bias = self.linear(fm_linear_input)
         fm_pairwise = self.pfm(sparse_feat_emb)
-        fm_output = fm_linear_and_bias + fm_pairwise
 
+        fm_output = fm_linear_and_bias + fm_pairwise
         # print(f"FM {fm_linear_and_bias.mean()} / {fm_pairwise.mean()} / {fm_output.mean()}")
         return fm_output
 
@@ -157,12 +127,15 @@ class DeepNeuralNetwork(nn.Module):
         super(DeepNeuralNetwork, self).__init__()
         fc_layers = [nn.Linear(n_input_feat, layers[0]),
                      nn.BatchNorm1d(layers[0], affine=False),
-                     nn.ReLU(inplace=True)]
+                     nn.ReLU(),
+                     # nn.ReLU(inplace=True)
+                     ]
+        # LeakyReLU
 
         for i in range(1, len(layers)):
             fc_layers.append(nn.Linear(layers[i - 1], layers[i]))
             fc_layers.append(nn.BatchNorm1d(layers[i], affine=False))
-            fc_layers.append(nn.Sigmoid())
+            fc_layers.append(nn.ReLU())
 
         fc_layers.append(nn.Linear(layers[-1], 1, bias=False))
         self.deep = nn.Sequential(*fc_layers)
@@ -183,7 +156,6 @@ class PairwiseFactorizationMachine(nn.Module):
         super(PairwiseFactorizationMachine, self).__init__()
 
     def forward(self, x):
-        # sparse feat 정보도 활용
         """
         Input shape
         - 3D tensor with shape: ``(batch_size,field_size,embedding_size)``.
