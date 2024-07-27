@@ -22,20 +22,21 @@ class DeepFactorizationMachineController:
         train_df, test_df = load_display_advertising_challenge_train_test_df()
 
         sparse_feat_train_df = train_df.iloc[:, 15:]  # C1 ~ C26
-        sparse_feat_train_cardinality_info = sparse_feat_train_df.nunique().to_dict()
+        sparse_feat_grp_train_info = sparse_feat_train_df.nunique().to_dict()
         sparse_feat_train_df = pd.get_dummies(sparse_feat_train_df, dummy_na=False, dtype='int')
-
-        print(f"{sparse_feat_train_cardinality_info}")
-        print(f"{np.sum(list(sparse_feat_train_cardinality_info.values()))}")
-        print(f"{sparse_feat_train_df.shape}")
 
         dense_feat_train_df = train_df.iloc[:, 2:15]  # I1 ~ I13
 
-        dense_feat_train_df = (dense_feat_train_df - dense_feat_train_df.min()) / (
-                    dense_feat_train_df.max() - dense_feat_train_df.min())
+        print(f"Sparse Feature Group Info: {sparse_feat_grp_train_info}")
+        print(f"Train Sparse-Dense Feature Dataframe Shape: {sparse_feat_train_df.shape} - {dense_feat_train_df.shape}")
+
+        # TODO MinMax scale
+        # TODO Z-Norm 공통 함수로 뽑아내기
+        # dense_feat_train_df = (dense_feat_train_df - dense_feat_train_df.min()) / (
+        #             dense_feat_train_df.max() - dense_feat_train_df.min())
 
         # dense_feat_train_df = (dense_feat_train_df - dense_feat_train_df.mean()) / dense_feat_train_df.std()
-        print(dense_feat_train_df.describe())
+        # print(dense_feat_train_df.describe())
 
         for col in dense_feat_train_df.columns:
             mean_val = dense_feat_train_df[col].mean()
@@ -43,19 +44,12 @@ class DeepFactorizationMachineController:
             # dense_feat_train_df[col] = (dense_feat_train_df[col] - mean_val) / std_val
             dense_feat_train_df[col] = dense_feat_train_df[col].fillna(mean_val)
 
-        print(dense_feat_train_df.info())
-        print(dense_feat_train_df.describe())
-
-        self.model = DeepFactorizationMachine(list(sparse_feat_train_cardinality_info.values()),
+        self.model = DeepFactorizationMachine(list(sparse_feat_grp_train_info.values()),
                                               dense_feat_train_df.shape[1],
                                               16,
                                               [128, 64]).to(self.device)
 
-        # self.optimizer = optim.(self.model.parameters(), lr=0.00001, momentum=0.9)
-        for name, param in self.model.named_parameters():
-            print(f"Name: {name} - shape: {param.shape}")
-
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.00001)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.01)
         self.criterion = nn.BCELoss()
 
         self.train_dataset = DeepFmDataset(sparse_feat_train_df.values.tolist(),
@@ -73,18 +67,15 @@ class DeepFactorizationMachineController:
         self.test_dataset = DeepFmDataset(sparse_feat_test_df.values.tolist(),
                                           dense_feat_test_df.values.tolist(),
                                           test_df.iloc[:, 1].values.tolist())
-
         self.model.to(self.device)
 
     def train(self, epochs: int, batch_size: int = 1000):
-
         self.model.train()
-        train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False) #
 
+        train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False)  #
         torch.autograd.set_detect_anomaly(True)
 
         for epoch in range(1, epochs):
-
             loss_records = []
             for sparse_feat, dense_feat, labels in train_loader:
 
@@ -95,25 +86,22 @@ class DeepFactorizationMachineController:
                 try:
                     loss.backward()
                     iter_loss = loss.item()
-                    # v_emb = torch.concat([emb.weight for emb in self.model.fm.sparse_emb_list_for_linear], dim=0)
-                    # print(f"Mean:{v_emb.mean()}, MAX:{v_emb.max()}, MIN:{v_emb.min()}") # 계속 값이 커지기만 하네;;
                 except Exception as err:
                     print(f"ERROR: {err}, LOSS: {loss.item()}")
                     for name, param in self.model.named_parameters():
                         if param.grad is not None:
-                            print(f"{name}: {param.grad.norm()}, {param.shape}, {param.requires_grad}, {param.isnan().any()}, {param.isinf().any()}")
+                            print(
+                                f"{name}: {param.grad.norm()}, {param.shape}, {param.requires_grad}, {param.isnan().any()}, {param.isinf().any()}")
                         else:
-                            print(f"{name}: GRAD NONE, {param.shape}, {param.requires_grad}, {param.isnan().any()}, {param.isinf().any()}")
+                            print(
+                                f"{name}: GRAD NONE, {param.shape}, {param.requires_grad}, {param.isnan().any()}, {param.isinf().any()}")
                     continue
-                    # pdb.set_trace()
 
-                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 self.optimizer.step()
                 loss_records.append(iter_loss)
 
             if epoch % (epochs // 20 - 1) == 0:
                 print(f'Epoch [{epoch}/{epochs}], Mean Loss: {np.mean(loss_records):.4f}')
-
 
             # if epoch % (epochs // 10 - 1) == 0:
             #     print(f'Epoch [{epoch}/{epochs}], Entering Validation Process...')
@@ -145,15 +133,10 @@ class DeepFactorizationMachineController:
 
 
 if __name__ == '__main__':
-    embedding_layer = nn.Embedding(num_embeddings=10, embedding_dim=3)
-    input_indices = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
-
-    embeddings = embedding_layer(input_indices)
-
     torch.manual_seed(123)
     torch.cuda.manual_seed(123)
     controller = DeepFactorizationMachineController()
-    controller.train(epochs=200, batch_size=1500)  # batch_size를 2000으로 하면 문제가 없는데...?
+    controller.train(epochs=1000, batch_size=1000)  # batch_size를 2000으로 하면 문제가 없는데...?
     # 500으로 suffle true시 문제가 있네?
     # 300으로 하면 17먼째에서 이슈?
     # 500으로 하면 25번째에서 이슈?
