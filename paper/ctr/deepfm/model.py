@@ -1,11 +1,3 @@
-# -*- coding:utf-8 -*-
-"""
-Author:
-    Weichen Shen,weichenswc@163.com
-Reference:
-    [1] Guo H, Tang R, Ye Y, et al. Deepfm: a factorization-machine based neural network for ctr prediction[J]. arXiv preprint arXiv:1703.04247, 2017.(https://arxiv.org/abs/1703.04247)
-"""
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -90,8 +82,7 @@ class FactorizationMachine(nn.Module):
 
 class PairwiseFactorizationMachine(nn.Module):
     """
-    Factorization Machine models pairwise (order-2) feature interactions
-    *Without linear term and bias*
+    Factorization Machine models pairwise (order-2) feature interactions **Without linear term and bias**
     pairwise (order-2) feature interactions refer to the interactions  between every possible pair of features in the dataset.
     """
 
@@ -100,10 +91,8 @@ class PairwiseFactorizationMachine(nn.Module):
 
     def forward(self, x):
         """
-        Input shape
-        - 3D tensor with shape: ``(batch_size,field_size,embedding_size)``.
-        Output shape
-        - 2D tensor with shape: ``(batch_size, 1)``.
+        x: 3D tensor with shape: ``(batch_size,field_size,embedding_size)``.
+        Output: 2D tensor with shape: ``(batch_size, 1)``.
         """
         square_of_sum = torch.pow(torch.sum(x, dim=1, keepdim=True), 2)
         sum_of_square = torch.sum(x * x, dim=1, keepdim=True)
@@ -114,20 +103,17 @@ class PairwiseFactorizationMachine(nn.Module):
 
 
 class DeepNeuralNetwork(nn.Module):
-    """
-    All of the layer in this module are full-connection layers
-    """
 
-    def __init__(self, n_input_feat, layers: list):
+    def __init__(self, emb_size: int, layers: list[int]):
         """
-        :param n_input_feat: total num of input_feature, including of the embedding feature and dense feature
+        :param emb_size: [(SparseGroupFeatSize + DenseFeatSize) * EmbeddingSize]
         :param layers: a list contains the num of each hidden layer's units
         """
         super(DeepNeuralNetwork, self).__init__()
         if layers[-1] != 1:
             layers.append(1)
 
-        fc_layers = [nn.Linear(n_input_feat, layers[0]),
+        fc_layers = [nn.Linear(emb_size, layers[0]),
                      nn.BatchNorm1d(layers[0], affine=False),
                      nn.Sigmoid()]
 
@@ -139,5 +125,9 @@ class DeepNeuralNetwork(nn.Module):
         self.deep = nn.Sequential(*fc_layers)
 
     def forward(self, x):
+        """
+        :param x: [BatchSize, EmbeddingSize == (SparseGroupFeatSize + DenseFeatSize) * EmbeddingSize]
+        :return: [BatchSize, 1]
+        """
         dense_output = self.deep(x)
         return dense_output
