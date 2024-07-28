@@ -60,6 +60,11 @@ class DeepFactorizationMachine(nn.Module):
 
 
 class FactorizationMachine(nn.Module):
+    """
+    Deal With first_order and second_order.
+    linear_and_bias term <W, X>
+    second_order term PairwiseFactorizationMachine
+    """
 
     def __init__(self,
                  sparse_feat_grp_size_list: list[int],
@@ -71,7 +76,7 @@ class FactorizationMachine(nn.Module):
 
     def forward(self, x, emb_x):
         """
-        x: [BatchSize, DimSize(SparseFeatSize + DenseFeatSize)]
+        x: [BatchSize, DimSize == (SparseFeatSize + DenseFeatSize)]
         emb_x: [BatchSize, FieldSize(SparseFeatGroupSize + DenseFeatSize), EmbeddingSize]
         """
         linear_and_bias = self.linear(x)
