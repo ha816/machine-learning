@@ -17,43 +17,42 @@ class DeepFactorizationMachineController:
         self.device = get_torch_gpu_device_if_available()
 
         df = DisplayAdvertisingChallenge.load_df()
+
+        sparse_feat_df = df.iloc[:, 15:]  # C1 ~ C26
+        sparse_feat_grp_info = sparse_feat_df.nunique().to_dict()
+        sparse_feat_df = pd.get_dummies(sparse_feat_df, dummy_na=False, dtype='int')
+
+        dense_feat_df = df.iloc[:, 2:15]  # I1 ~ I13
+        for col in dense_feat_df.columns:
+            mean_val = dense_feat_df[col].mean()
+            dense_feat_df[col] = dense_feat_df[col].fillna(mean_val)
+
+        print(f"Sparse & Dense Shape: {sparse_feat_df.shape} - {dense_feat_df.shape}")
+        print(f"Sparse Feature Group Info: {sparse_feat_grp_info}")
+
+        df = pd.concat([df.iloc[:, 0:2], sparse_feat_df, dense_feat_df], axis=1)
+        print(f"Preprocessed Dataframe: {df.shape}")
+        assert df.shape[0] == df.shape[0]
+
         train_df, test_df = train_test_split(df, test_size=0.2, shuffle=True)
+        print(f"Train-Test Dataframe: {train_df.shape} - {test_df.shape}")
 
-        sparse_feat_train_df = train_df.iloc[:, 15:]  # C1 ~ C26
-        sparse_feat_grp_train_info = sparse_feat_train_df.nunique().to_dict()
-        sparse_feat_train_df = pd.get_dummies(sparse_feat_train_df, dummy_na=False, dtype='int')
-        dense_feat_train_df = train_df.iloc[:, 2:15]  # I1 ~ I13
+        self.train_dataset = DeepFmDataset(train_df.iloc[:, 15:].values.tolist(),
+                                           train_df.iloc[:, 2:15].values.tolist(),
+                                           train_df.iloc[:, 1].values.tolist())
 
-        print(f"Sparse Feature Group Info: {sparse_feat_grp_train_info}")
-        print(f"Train Sparse-Dense Feature Dataframe Shape: {sparse_feat_train_df.shape} - {dense_feat_train_df.shape}")
+        self.test_dataset = DeepFmDataset(test_df.iloc[:, 15:].values.tolist(),
+                                          test_df.iloc[:, 2:15].values.tolist(),
+                                          test_df.iloc[:, 1].values.tolist())
 
-        for col in dense_feat_train_df.columns:
-            mean_val = dense_feat_train_df[col].mean()
-            dense_feat_train_df[col] = dense_feat_train_df[col].fillna(mean_val)
-
-        self.model = DeepFactorizationMachine(list(sparse_feat_grp_train_info.values()),
-                                              dense_feat_train_df.shape[1],
+        self.model = DeepFactorizationMachine(list(sparse_feat_grp_info.values()),
+                                              dense_feat_df.shape[1],
                                               16,
                                               [128, 64]).to(self.device)
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.00001)
         self.criterion = nn.BCELoss()
 
-        self.train_dataset = DeepFmDataset(sparse_feat_train_df.values.tolist(),
-                                           dense_feat_train_df.values.tolist(),
-                                           train_df.iloc[:, 1].values.tolist())
-
-        sparse_feat_test_df = test_df.iloc[:, 15:]  # C1 ~ C26
-        sparse_feat_test_df = pd.get_dummies(sparse_feat_test_df, dummy_na=True, dtype='int')
-
-        dense_feat_test_df = test_df.iloc[:, 2:15]  # I1 ~ I13
-        for col in dense_feat_test_df.columns:
-            mean_val = dense_feat_test_df[col].mean()
-            dense_feat_test_df[col] = dense_feat_test_df[col].fillna(mean_val)
-
-        self.test_dataset = DeepFmDataset(sparse_feat_test_df.values.tolist(),
-                                          dense_feat_test_df.values.tolist(),
-                                          test_df.iloc[:, 1].values.tolist())
         self.model.to(self.device)
 
     def train(self, epochs: int, batch_size: int = 1000):
