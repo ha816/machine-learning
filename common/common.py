@@ -1,9 +1,9 @@
 from pandas import DataFrame
 
 
-def minMaxScale(df: DataFrame) -> DataFrame:
+def min_max_Scale(df: DataFrame) -> DataFrame:
     return (df - df.min()) / (df.max() - df.min())
 
 
-def zScoreNorm(df: DataFrame) -> DataFrame:
+def z_score_Norm(df: DataFrame) -> DataFrame:
     return (df - df.mean()) / df.std()

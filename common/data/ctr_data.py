@@ -2,7 +2,33 @@ import os
 
 import pandas as pd
 
-dir_path = f"{os.path.dirname(__file__)}/ctr"
+
+class DisplayAdvertisingChallenge:
+    __CTR_PATH = dir_path = f"{os.path.dirname(__file__)}/ctr"
+
+    @classmethod
+    def load_train_and_test_df(cls):
+        """
+        https://www.kaggle.com/c/criteo-display-ad-challenge/data
+
+        Data fields
+        Label - Target variable that indicates if an ad was clicked (1) or not (0).
+        I1-I13 - A total of 13 columns of integer features (mostly count features).
+        C1-C26 - A total of 26 columns of categorical features. The values of these features have been hashed onto 32 bits for anonymization purposes.
+        """
+        return (pd.read_csv(f"{cls.__CTR_PATH}/display_advertising_challenge_train.csv"),
+                pd.read_csv(f"{cls.__CTR_PATH}/display_advertising_challenge_test.csv"))
+
+    @classmethod
+    def load_df(cls):
+        train_df = pd.read_csv(f"{cls.__CTR_PATH}/display_advertising_challenge_train.csv")
+        test_df = pd.read_csv(f"{cls.__CTR_PATH}/display_advertising_challenge_test.csv")
+        return pd.concat([train_df, test_df])
+
+
+def train_test_split(df, test_size: float, random_state=None, shuffle=True):
+    from sklearn.model_selection import train_test_split
+    return tuple(train_test_split(df, test_size=test_size, random_state=random_state, shuffle=shuffle))
 
 
 def load_display_advertising_challenge_train_test_df():
@@ -18,26 +44,14 @@ def load_display_advertising_challenge_train_test_df():
             pd.read_csv(f"{dir_path}/display_advertising_challenge_test.csv"))
 
 
-def judgeGender(gender):
-    if gender == '1':  # male
-        return 1
-    elif gender == '2':  # female
-        return 2
-    else:
-        return 0
+def load_display_advertising_challenge_train_test_df():
+    """
+    https://www.kaggle.com/c/criteo-display-ad-challenge/data
 
-
-def loadLabelEncoder(address):
-    with open(address, 'rb') as f:
-        age = pkl.load(f)
-        gender = pkl.load(f)
-        province = pkl.load(f)
-        label = pkl.load(f)
-    return age, gender, province, label
-
-
-def bias_score(true_label, predict_pro):
-    ctr_gt = np.mean(true_label)
-    ctr_predict = np.mean(predict_pro)
-    ans = ctr_predict / ctr_gt - 1
-    return ans
+    Data fields
+    Label - Target variable that indicates if an ad was clicked (1) or not (0).
+    I1-I13 - A total of 13 columns of integer features (mostly count features).
+    C1-C26 - A total of 26 columns of categorical features. The values of these features have been hashed onto 32 bits for anonymization purposes.
+    """
+    return (pd.read_csv(f"{dir_path}/display_advertising_challenge_train.csv"),
+            pd.read_csv(f"{dir_path}/display_advertising_challenge_test.csv"))

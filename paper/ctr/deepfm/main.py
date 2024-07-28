@@ -1,15 +1,12 @@
-import pdb
-
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader
 
 from common.config import get_torch_gpu_device_if_available
-from common.data.ctr_data import load_display_advertising_challenge_train_test_df
+from common.data.ctr_data import DisplayAdvertisingChallenge, train_test_split
 from paper.ctr.deepfm.dataset import DeepFmDataset
 from paper.ctr.deepfm.model import DeepFactorizationMachine
 
@@ -19,7 +16,8 @@ class DeepFactorizationMachineController:
     def __init__(self):
         self.device = get_torch_gpu_device_if_available()
 
-        train_df, test_df = load_display_advertising_challenge_train_test_df()
+        df = DisplayAdvertisingChallenge.load_df()
+        train_df, test_df = train_test_split(df, test_size=0.2, shuffle=True)
 
         sparse_feat_train_df = train_df.iloc[:, 15:]  # C1 ~ C26
         sparse_feat_grp_train_info = sparse_feat_train_df.nunique().to_dict()
@@ -29,18 +27,8 @@ class DeepFactorizationMachineController:
         print(f"Sparse Feature Group Info: {sparse_feat_grp_train_info}")
         print(f"Train Sparse-Dense Feature Dataframe Shape: {sparse_feat_train_df.shape} - {dense_feat_train_df.shape}")
 
-        # TODO MinMax scale
-        # TODO Z-Norm 공통 함수로 뽑아내기
-        # dense_feat_train_df = (dense_feat_train_df - dense_feat_train_df.min()) / (
-        #             dense_feat_train_df.max() - dense_feat_train_df.min())
-
-        # dense_feat_train_df = (dense_feat_train_df - dense_feat_train_df.mean()) / dense_feat_train_df.std()
-        # print(dense_feat_train_df.describe())
-
         for col in dense_feat_train_df.columns:
             mean_val = dense_feat_train_df[col].mean()
-            # std_val = dense_feat_train_df[col].std()
-            # dense_feat_train_df[col] = (dense_feat_train_df[col] - mean_val) / std_val
             dense_feat_train_df[col] = dense_feat_train_df[col].fillna(mean_val)
 
         self.model = DeepFactorizationMachine(list(sparse_feat_grp_train_info.values()),
@@ -71,7 +59,7 @@ class DeepFactorizationMachineController:
     def train(self, epochs: int, batch_size: int = 1000):
         self.model.train()
 
-        train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False)  #
+        train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False)
         torch.autograd.set_detect_anomaly(True)
 
         for epoch in range(1, epochs):
@@ -102,13 +90,13 @@ class DeepFactorizationMachineController:
             if epoch % (epochs // 20 - 1) == 0:
                 print(f'Epoch [{epoch}/{epochs}], Mean Loss: {np.mean(loss_records):.4f}')
 
-            # if epoch % (epochs // 10 - 1) == 0:
-            #     print(f'Epoch [{epoch}/{epochs}], Entering Validation Process...')
-            #     self.test(batch_size)
+            if epoch % (epochs // 10 - 1) == 0:
+                print(f'Epoch [{epoch}/{epochs}], Entering Validation Process...')
+                self.test(batch_size)
 
-        # self.test(batch_size)
+        self.test(batch_size)
 
-    def test(self, batch_size: int = 500):
+    def test(self, batch_size: int = 1000):
         self.model.eval()
         test_loader = DataLoader(self.test_dataset, batch_size=batch_size)
 
@@ -134,5 +122,6 @@ class DeepFactorizationMachineController:
 if __name__ == '__main__':
     torch.manual_seed(123)
     torch.cuda.manual_seed(123)
+
     controller = DeepFactorizationMachineController()
     controller.train(epochs=500, batch_size=1000)
