@@ -24,7 +24,6 @@ class DeepFactorizationMachineController:
         sparse_feat_train_df = train_df.iloc[:, 15:]  # C1 ~ C26
         sparse_feat_grp_train_info = sparse_feat_train_df.nunique().to_dict()
         sparse_feat_train_df = pd.get_dummies(sparse_feat_train_df, dummy_na=False, dtype='int')
-
         dense_feat_train_df = train_df.iloc[:, 2:15]  # I1 ~ I13
 
         print(f"Sparse Feature Group Info: {sparse_feat_grp_train_info}")
@@ -49,7 +48,7 @@ class DeepFactorizationMachineController:
                                               16,
                                               [128, 64]).to(self.device)
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.01)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.00001)
         self.criterion = nn.BCELoss()
 
         self.train_dataset = DeepFmDataset(sparse_feat_train_df.values.tolist(),
@@ -136,13 +135,4 @@ if __name__ == '__main__':
     torch.manual_seed(123)
     torch.cuda.manual_seed(123)
     controller = DeepFactorizationMachineController()
-    controller.train(epochs=1000, batch_size=1000)  # batch_size를 2000으로 하면 문제가 없는데...?
-    # 500으로 suffle true시 문제가 있네?
-    # 300으로 하면 17먼째에서 이슈?
-    # 500으로 하면 25번째에서 이슈?
-    # learning rate를 약간 높임
-
-    # if torch.isnan(sparse_feat).any() or torch.isnan(dense_feat).any(): # 해당 없음
-    #     continue
-    # if torch.isinf(sparse_feat).any() or torch.isinf(dense_feat).any(): # 해당 없음
-    #     continue
+    controller.train(epochs=500, batch_size=1000)
