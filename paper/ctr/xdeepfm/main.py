@@ -8,7 +8,6 @@ from torch.utils.data import DataLoader
 from common.config import get_torch_gpu_device_if_available
 from common.data.ctr_data import DisplayAdvertisingChallenge, train_test_split
 from paper.ctr.deepfm.dataset import DeepFmDataset
-from paper.ctr.deepfm.model import DeepFactorizationMachine
 from paper.ctr.xdeepfm.model import XDeepFactorizationMachine
 
 
