@@ -1,8 +1,9 @@
-# DeepFM: A Factorization-Machine based Neural Network for CTR Prediction
+# xDeepFM: Combining Explicit and Implicit Feature Interactions
+for Recommender Systems
 
-ADKDD 17, March 13
+cs.LG 14 Mar 2018
 
-https://arxiv.org/pdf/1703.04247v1
+https://arxiv.org/pdf/1803.05170
 
 # Dataset
 
