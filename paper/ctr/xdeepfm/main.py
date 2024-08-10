@@ -40,8 +40,10 @@ class XDeepFactorizationMachineController:
 
         self.model = XDeepFactorizationMachine(list(sparse_feat_grp_info.values()),
                                                dense_feat_df.shape[1],
-                                               16,
-                                               [128, 64]).to(get_torch_gpu_device_if_available())
+                                               32,
+                                               [64, 32],
+                                               [64, 32]
+                                               ).to(get_torch_gpu_device_if_available())
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.0001)
         self.criterion = nn.BCELoss()

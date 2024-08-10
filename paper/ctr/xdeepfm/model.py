@@ -3,7 +3,7 @@ import torch
 from torch import nn
 
 
-class XDeepFactorizationMachine:
+class XDeepFactorizationMachine(nn.Module):
     """Instantiates the xDeepFM architecture.
 
     """
@@ -21,15 +21,15 @@ class XDeepFactorizationMachine:
         self.emb_size = emb_size
 
         self.sparse_emb_list = nn.ModuleList([nn.Linear(field_size, emb_size, bias=False)
-                                              for field_size in sparse_feat_grp_size_list])
-        self.dense_emb = nn.Linear(n_dense_feat, n_dense_feat * emb_size, bias=False)  # [D.F, D.F * E]
+                                              for field_size in sparse_feat_grp_size_list])  # 모델
+        self.dense_emb = nn.Linear(n_dense_feat, n_dense_feat * emb_size, bias=False)  # [D.F, D.F * E] 가중치 모델
 
-        n_dim = np.sum(sparse_feat_grp_size_list) + n_dense_feat
-        # TODO XDeepFactorizationMachine 구현
-        # TODO 아래 3가지 모델 수정
+        n_sparse_grp_feat = len(sparse_feat_grp_size_list)
+        n_sparse_feat = np.sum(sparse_feat_grp_size_list)
+        n_dim = n_sparse_feat + n_dense_feat
         self.fm = FactorizationMachine(n_dim)
-        self.dnn = DeepNeuralNetwork(emb_size, neural_layers)
-        self.cin = CompressedInteractionNetwork(n_dim, cin_layers)
+        self.dnn = DeepNeuralNetwork((n_sparse_grp_feat + n_dense_feat) * emb_size, neural_layers)  #
+        self.cin = CompressedInteractionNetwork(n_sparse_grp_feat, cin_layers, cin_split_half)
 
     def forward(self, sparse, dense):
         """
@@ -46,7 +46,7 @@ class XDeepFactorizationMachine:
 
         fm_term = self.fm(torch.concat((sparse, dense), dim=-1))
         dnn_term = self.dnn(torch.flatten(emb, start_dim=1))
-        cin_term = self.cin(emb)
+        cin_term = self.cin(sparse_emb)
 
         y_pred = torch.sigmoid(fm_term + dnn_term + cin_term)
         return y_pred.squeeze(-1)
@@ -65,72 +65,71 @@ class XDeepFactorizationMachine:
 
 
 class CompressedInteractionNetwork(nn.Module):
-    """Compressed Interaction Network used in xDeepFM.
-      Input shape
-        - 3D tensor with shape: ``(batch_size,field_size,embedding_size)``.
-      Output shape
-        - 2D tensor with shape: ``(batch_size, featuremap_num)``
-        ``featuremap_num =  sum(self.layer_size[:-1]) // 2 + self.layer_size[-1]``
-        if ``split_half=True``,else  ``sum(layer_size)`` .
-    """
 
     def __init__(self,
                  n_dim: int,
-                 layers=[128, 128],
+                 layers: list[int],
                  half_split=True):
 
         super(CompressedInteractionNetwork, self).__init__()
-        if layers[-1] != 1:
-            layers.append(1)
 
-        self.n_dims = [n_dim]
+        for layer in layers[:-1]:
+            if layer % 2 != 0:
+                raise ValueError("n_dims must be even number except for the last layer when split_half=True")
+
+        self.n_dim = n_dim
         self.half_split = half_split
         self.activation = nn.ReLU()
+        self.layers = layers
 
         self.conv1d_list = nn.ModuleList()
-        for idx, size in enumerate(layers):
-            self.conv1d_list.append(nn.Conv1d(self.n_dims[-1] * n_dim, size, 1))
+        n_feat_map = 0
+        prev_layer = n_dim
+        for idx, layer in enumerate(layers):
+            self.conv1d_list.append(nn.Conv1d(prev_layer * n_dim, layer, 1))
+            prev_layer = layer // 2 if half_split else layer
+            n_feat_map += prev_layer
 
-            if self.half_split:
-                if idx != len(self.n_dims) - 1 and size % 2 == 0:
-                    raise ValueError("n_dims must be even number except for the last layer when split_half=True")
-                self.n_dims.append(size // 2)
-            else:
-                self.n_dims.append(size)
+        self.logit = nn.Linear(n_feat_map, 1, bias=False)
 
     def forward(self, x):
         """
-        x: [BatchSize, (SparseGroupFeatSize + DenseFeatSize), EmbeddingSize]
+        x: [BatchSize, SparseFeatSize, EmbeddingSize]
+        output: [batch_size, 1]
         """
         batch_size, n_feat, n_emb = tuple(x.shape)
-        hidden_nn_layers = [x]
+        hidden_layers = [x]
 
+        prev_out = x
         result = []
-        for idx, (n_dim, conv1d) in enumerate(zip(self.n_dims, self.conv1d_list)):
-            last_hidden_layer = hidden_nn_layers[-1]
+        for idx, conv1d in enumerate(self.conv1d_list):
+            # last_hidden_layer = hidden_layers[-1]
 
-            out = torch.einsum('bhd,bmd->bhmd', last_hidden_layer, x)  # (batch_size , hi * m, dim)
-            out = out.reshape(batch_size, last_hidden_layer.shape[1] * n_feat, n_emb)  # (batch_size , hi, dim)
-            out = self.conv1d(out)  # layers의 차원별로 conv1d가 존재
+            out = torch.einsum('bhd,bmd->bhmd', prev_out, x)
+            # out = torch.einsum('bhd,bmd->bhmd', last_hidden_layer, x)  # (batch_size , n_feat, n_feat, n_emb)
+            out = out.reshape(batch_size, -1, n_emb)  # (batch_size , n_feat^2 , n_emb)
+            # out = out.reshape(batch_size, last_hidden_layer.shape[1] * n_feat, n_emb)  # (batch_size , n_feat^2 , n_emb)
+            out = conv1d(out)  # (batch_size, layer, emb)
             out = self.activation(out)
 
             if self.half_split:
-                if idx < len(self.n_dims):
-                    curr_out_dim = 2 * [n_dim // 2]  # size int 값의 절반값의 [size//2, size//2]
-                    next_hidden, direct_connect = torch.split(out, curr_out_dim, 1)
+                if out.shape[1] % 2 == 0:
+                    split_size = 2 * [out.shape[1] // 2]  # size int 값의 절반값의 [size//2, size//2]
+                    # split_size = 2
+                    next_hidden, direct_connect = torch.split(out, split_size, 1)  # out을 dim1으로 해서 두 개로 쪼갠다
                 else:
-                    direct_connect = out
-                    next_hidden = 0
+                    result.append(out)
+                    break
             else:
                 direct_connect = out
                 next_hidden = out
 
             result.append(direct_connect)
-            hidden_nn_layers.append(next_hidden)
+            prev_out = next_hidden
 
-        result = torch.cat(result, dim=1)  # 각 direct_connect를 쌓아서
-        result = torch.sum(result, -1)  # 하나로 합쳐서 반환
-        return result
+        feat_map = torch.cat(result, dim=1)
+        feat_map = torch.sum(feat_map, -1)
+        return self.logit(feat_map)
 
 
 class FactorizationMachine(nn.Module):
