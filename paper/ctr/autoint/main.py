@@ -103,4 +103,4 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(123)
 
     controller = AutoIntController()
-    controller.train(epochs=500, batch_size=1000)
+    controller.train(epochs=300, batch_size=1000)

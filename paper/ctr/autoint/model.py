@@ -22,6 +22,7 @@ class AutoInt(nn.Module):
 
         self.sparse_emb_list = nn.ModuleList([nn.Linear(field_size, emb_size, bias=False)
                                               for field_size in sparse_feat_grp_size_list])
+        self.dense_emb = nn.Linear(n_dense_feat, n_dense_feat * emb_size, bias=False)  # [D.F, D.F * E]
 
         n_sparse_grp_feat = len(sparse_feat_grp_size_list)
         n_sparse_feat = int(np.sum(sparse_feat_grp_size_list))
@@ -31,9 +32,9 @@ class AutoInt(nn.Module):
         self.auto_int_layers = nn.ModuleList([InteractingLayer(emb_size, n_head=n_multi_att_head)
                                               for _ in range(n_att_layer)])
 
-        self.dnn = DeepNeuralNetwork(n_sparse_grp_feat * emb_size + n_dense_feat, deep_layers)
+        self.dnn = DeepNeuralNetwork((n_sparse_grp_feat + n_dense_feat) * emb_size, deep_layers)
 
-        dnn_linear_in_feature = deep_layers[-1] + n_sparse_grp_feat * emb_size
+        dnn_linear_in_feature = deep_layers[-1] + (n_sparse_grp_feat + n_dense_feat)  * emb_size
         self.dnn_linear = nn.Linear(dnn_linear_in_feature, 1, bias=False)
 
     def forward(self, sparse, dense):
@@ -45,19 +46,18 @@ class AutoInt(nn.Module):
         spare_grp_list = self.get_spare_feat_grp_list(sparse)
         sparse_grp_emb_list = [emb(sparse_grp) for sparse_grp, emb in zip(spare_grp_list, self.sparse_emb_list)]
         sparse_emb = torch.stack(sparse_grp_emb_list, dim=1)  # [B, S.G.F, E]
+        dense_emb = self.dense_emb(dense).reshape(dense.shape[0], -1, self.emb_size)  # [B, D.F, E]
+        concat_emb = torch.cat((sparse_emb, dense_emb), dim=1)
 
-        dnn_input = torch.cat((torch.flatten(sparse_emb, start_dim=1), dense), dim=1)
-        dnn_out = self.dnn(dnn_input)
-
-        att_input = sparse_emb
+        att_input = concat_emb
         for layer in self.auto_int_layers:
             att_input = layer(att_input)
         att_output = torch.flatten(att_input, start_dim=1)
 
-        linear_logit = self.linear(torch.concat((sparse, dense), dim=-1))
+        dnn_out = self.dnn(torch.flatten(concat_emb, start_dim=1)) # (n_sparse_grp_feat + n_dense_feat) * emb_size
         dnn_logit = self.dnn_linear(torch.concat([dnn_out, att_output], dim=-1))
-
-        y_pred = torch.sigmoid(linear_logit + dnn_logit)
+        linear_logit = self.linear(torch.concat((sparse, dense), dim=-1))
+        y_pred = torch.sigmoid(dnn_logit + linear_logit)
         return y_pred.squeeze(-1)
 
     def get_spare_feat_grp_list(self, sparse_feat):
